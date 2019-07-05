@@ -30,7 +30,46 @@ pipeline {
         }
       }
     }
-    stage('Build Release') {
+    stage('Build Release - Staging') {
+      when {
+        branch 'dev'
+      }
+      steps {
+        container('python') {
+
+          // ensure we're not on a detached head
+          sh "git checkout dev"
+          sh "git config --global credential.helper store"
+          sh "jx step git credentials"
+
+          // so we can retrieve the version in later steps
+          sh "echo \$(jx-release-version) > VERSION"
+          sh "jx step tag --version \$(cat VERSION)"
+          sh "python -m unittest"
+          sh "export VERSION=`cat VERSION` && skaffold build -f skaffold.yaml"
+          sh "jx step post build --image $DOCKER_REGISTRY/$ORG/$APP_NAME:\$(cat VERSION)"
+        }
+      }
+    }
+    stage('Promote to Environments - Staging') {
+      when {
+        branch 'dev'
+      }
+      steps {
+        container('python') {
+          dir('./charts/python-flask-docker') {
+            sh "jx step changelog --version v\$(cat ../../VERSION)"
+
+            // release the helm chart
+            sh "jx step helm release"
+
+            // promote through all 'Auto' promotion Environments
+            sh "jx promote -b --all-auto --timeout 1h --version \$(cat ../../VERSION)"
+          }
+        }
+      }
+    }
+    stage('Build Release - Prod') {
       when {
         branch 'master'
       }
@@ -51,7 +90,7 @@ pipeline {
         }
       }
     }
-    stage('Promote to Environments') {
+    stage('Promote to Environments - Prod') {
       when {
         branch 'master'
       }
